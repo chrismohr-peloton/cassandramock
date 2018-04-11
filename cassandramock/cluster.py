@@ -29,16 +29,16 @@ class Session(object):
         self.mappings = {}
         self.tokens = ['AND', 'OR']
         # regex to find the db.table_name
-        self.insert_stmt_regex = re.compile('^INSERT INTO (?P<dbname>(\w+\.)?\w+)*', re.I)
-        self.create_stmt_regex = re.compile('^CREATE TABLE (?P<dbname>(\w+\.)?\w+)*', re.I)
+        self.insert_stmt_regex = re.compile('^INSERT INTO (?P<dbname>([\w"]+\.)?[\w"]+)*', re.I)
+        self.create_stmt_regex = re.compile('^CREATE TABLE (?P<dbname>([\w"]+\.)?[\w"]+)*', re.I)
         #self.select_stmt_regex = re.COMPILE
         
-    def execute(self, query, queryargs=None):
+    def execute(self, query, parameters=None, **kwargs):
         # Health check.
         is_query_prepared = False
-        if isinstance(query, PreparedStatement) and queryargs:
-            query = query.bind(queryargs)
-            queryargs = None
+        if isinstance(query, PreparedStatement) and parameters:
+            query = query.bind(parameters)
+            parameters = None
             is_query_prepared = True
             
         if 'system.local' in query:
@@ -50,31 +50,31 @@ class Session(object):
         query = query.replace('FALSE', '0')
         query = query.replace('TRUE', '1')
 
-        if isinstance(queryargs, tuple) and not is_query_prepared:
+        if isinstance(parameters, (tuple, list)) and not is_query_prepared:
 
             # convert UUID to string
-            queryargs = tuple([str(s) if isinstance(s, uuid.UUID)
-                           else s for s in queryargs])
+            parameters = tuple([str(s) if isinstance(s, uuid.UUID)
+                           else s for s in parameters])
 
             # sqlite prefers ? over %s for positional args
             query = query.replace('%S', '?')
 
-        elif isinstance(queryargs, dict):
+        elif isinstance(parameters, dict):
 
             # If the user passed dictionary arguments, assume that they
             # used that cassandra %(fieldname)s and convert to sqlite's
             # :fieldname
 
-            for k, v in queryargs.items():
+            for k, v in parameters.items():
                 cass_style_arg = "%({0})S".format(k)
                 sqlite_style_arg = ":{0}".format(k)
                 query = query.replace(cass_style_arg, sqlite_style_arg)
 
                 # Convert UUID parameters to strings
                 if isinstance(v, uuid.UUID):
-                    queryargs[k] = str(v)
+                    parameters[k] = str(v)
 
-        elif queryargs == None:
+        elif parameters == None:
             pass
 
         if "JOIN" in query.strip():
@@ -186,23 +186,35 @@ class Session(object):
 
         res = {}
         
-        if not queryargs:
+        if not parameters:
             res = self.conn.execute(query)
         else:
-            res = self.conn.execute(query, queryargs)
+            res = self.conn.execute(query, parameters)
         res = list(res)
 
-        return res
+        return MockResultSet(res)
 
 
     def prepare(self, query, custom_payload=None):
         return PreparedStatement(query)
 
-    def execute_async(self, query, queryargs):
+    def execute_async(self, query, parameters, **kwargs):
 
-        res = self.execute(query, queryargs)
+        res = self.execute(query, parameters, **kwargs)
 
         return Future(res)
+
+class MockResultSet(object):
+    def __init__(self, results):
+        self.results = results
+        self.current_rows = 1 if results else None
+
+    def __iter__(self):
+        return iter(self.results)
+
+    def __repr__(self):
+        return "[%s]" % ' '.join(repr(el) for el in self.results)
+
 
 class Cluster(object):
 
